@@ -38,6 +38,19 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['update_appointment']))
         AND status = 'pending'
         AND id != ?
     ");
+    if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['delete_appointment'])) {
+    $appointment_id = $_POST['appointment_id'];
+    
+    $delete = $conn->prepare("DELETE FROM appointments WHERE id = ?");
+    $delete->bind_param("i", $appointment_id);
+    
+    if ($delete->execute()) {
+        $_SESSION['success'] = "Appointment deleted successfully!";
+    } else {
+        $_SESSION['error'] = "Failed to delete appointment.";
+    }
+    
+
     $mechanic_check->bind_param("isi", $new_mechanic_id, $new_date, $appointment_id);
     $mechanic_check->execute();
     $mechanic_result = $mechanic_check->get_result()->fetch_assoc();
@@ -99,13 +112,18 @@ $mechanics = $conn->query("SELECT id, name FROM mechanics")->fetch_all(MYSQLI_AS
         .error { color: #ff3333; padding: 10px; background: rgba(255,51,51,0.1); margin-bottom: 15px; }
         .logout { float: right; color: #4361ee; text-decoration: none; }
         select, input[type='date'] { padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
-        button { padding: 8px 15px; background: #4361ee; color: white; border: none; border-radius: 4px; cursor: pointer; }
-        button:hover { background: #3a56d4; }
+        button { padding: 8px 15px; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        .btn-update { background: #4361ee; }
+        .btn-update:hover { background: #3a56d4; }
+        .btn-delete { background: #ff3333; margin-left: 5px; }
+        .btn-delete:hover { background: #e60000; }
+        .action-form { display: inline-block; margin: 0; }
+        .actions-cell { white-space: nowrap; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Admin Dashboard <a href="logout.php" class="logout"><i class="fas fa-sign-out-alt"></i> Logout</a></h1>
+        <h1>Admin Dashboard <a href="admin_login.php" class="logout"><i class="fas fa-sign-out-alt"></i> Logout</a></h1>
         
         <?php if (isset($_SESSION['success'])): ?>
             <div class="success"><?= $_SESSION['success'] ?></div>
@@ -140,8 +158,8 @@ $mechanics = $conn->query("SELECT id, name FROM mechanics")->fetch_all(MYSQLI_AS
                         <?= htmlspecialchars($appointment['mechanic_name']) ?>
                         (<?= $appointment['mechanic_load'] ?>/<?= $appointment['max_cars_per_day'] ?>)
                     </td>
-                    <td>
-                        <form method="POST">
+                    <td class="actions-cell">
+                        <form method="POST" class="action-form">
                             <input type="hidden" name="appointment_id" value="<?= $appointment['id'] ?>">
                             <input type="date" name="appointment_date" value="<?= $appointment['appointment_date'] ?>" required>
                             <select name="mechanic_id" required>
@@ -151,7 +169,17 @@ $mechanics = $conn->query("SELECT id, name FROM mechanics")->fetch_all(MYSQLI_AS
                                     </option>
                                 <?php endforeach; ?>
                             </select>
-                            <button type="submit" name="update_appointment">Update</button>
+                            <button type="submit" name="update_appointment" class="btn-update">
+                                <i class="fas fa-save"></i> Update
+                            </button>
+                        </form>
+                        
+                        <form method="POST" class="action-form">
+                            <input type="hidden" name="appointment_id" value="<?= $appointment['id'] ?>">
+                            <button type="submit" name="delete_appointment" class="btn-delete" 
+                                    onclick="return confirm('Are you sure you want to delete this appointment?')">
+                                <i class="fas fa-trash-alt"></i> Delete
+                            </button>
                         </form>
                     </td>
                 </tr>
