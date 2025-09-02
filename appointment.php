@@ -6,7 +6,6 @@ $username = "root";
 $password = "";
 $dbname = "car_workshop";
 
-// Create connection
 $conn = new mysqli($servername, $username, $password, $dbname);
 
 // Check connection
@@ -14,26 +13,33 @@ if ($conn->connect_error) {
     die("Connection failed: " . $conn->connect_error);
 }
 
-// Set charset to utf8mb4 for full Unicode support
 $conn->set_charset("utf8mb4");
 
+// Initialize variables
+$mechanics = [];
+$selected_date = date('Y-m-d');
+$availability_checked = false;
 
-// Get available mechanics with their current load
-$current_date = date('Y-m-d');
-$query = "SELECT m.id, m.name, m.max_cars_per_day, 
-          COUNT(a.id) AS current_appointments,
-          (m.max_cars_per_day - COUNT(a.id)) AS available_slots
-          FROM mechanics m
-          LEFT JOIN appointments a ON m.id = a.mechanic_id 
-              AND a.appointment_date = ?
-              AND a.status = 'pending'
-          GROUP BY m.id
-          HAVING available_slots > 0";
-$stmt = $conn->prepare($query);
-$stmt->bind_param("s", $current_date);
-$stmt->execute();
-$result = $stmt->get_result();
-$mechanics = $result->fetch_all(MYSQLI_ASSOC);
+// Get mechanics availability based on selected date
+if ($_SERVER['REQUEST_METHOD'] == 'GET' && isset($_GET['appointment_date'])) {
+    $selected_date = $_GET['appointment_date'];
+    $availability_checked = true;
+    
+    $query = "SELECT m.id, m.name, m.max_cars_per_day, 
+              COUNT(a.id) AS current_appointments,
+              (m.max_cars_per_day - COUNT(a.id)) AS available_slots
+              FROM mechanics m
+              LEFT JOIN appointments a ON m.id = a.mechanic_id 
+                  AND a.appointment_date = ?
+                  AND a.status = 'pending'
+              GROUP BY m.id
+              HAVING available_slots > 0";
+    $stmt = $conn->prepare($query);
+    $stmt->bind_param("s", $selected_date);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $mechanics = $result->fetch_all(MYSQLI_ASSOC);
+}
 
 // Handle form submission
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
@@ -55,25 +61,22 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     if (empty($mechanic_id)) $errors[] = "Mechanic selection is required";
     
     if (empty($errors)) {
-        // Check if client already has an appointment on this date
-        $client_check = $conn->prepare("SELECT id FROM clients WHERE car_license = ? OR car_engine = ?");
-        $client_check->bind_param("ss", $car_license, $car_engine);
-        $client_check->execute();
-        $client_result = $client_check->get_result();
         
-        if ($client_result->num_rows > 0) {
-            $client = $client_result->fetch_assoc();
-            $appointment_check = $conn->prepare("SELECT id FROM appointments WHERE client_id = ? AND appointment_date = ?");
-            $appointment_check->bind_param("is", $client['id'], $appointment_date);
-            $appointment_check->execute();
-            
-            if ($appointment_check->get_result()->num_rows > 0) {
-                $errors[] = "You already have an appointment on this date";
-            }
+        $car_check = $conn->prepare("
+            SELECT a.id 
+            FROM appointments a 
+            JOIN clients c ON a.client_id = c.id 
+            WHERE a.appointment_date = ? 
+            AND (c.car_license = ? OR c.car_engine = ?)
+        ");
+        $car_check->bind_param("sss", $appointment_date, $car_license, $car_engine);
+        $car_check->execute();
+        
+        if ($car_check->get_result()->num_rows > 0) {
+            $errors[] = "This car already has an appointment on the selected date. Please use a different car or choose another date.";
         }
         
         if (empty($errors)) {
-            // Check mechanic availability with status condition
             $mechanic_check = $conn->prepare("
                 SELECT COUNT(*) as count 
                 FROM appointments 
@@ -91,23 +94,33 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             $max_result = $max_check->get_result()->fetch_assoc();
             
             if ($mechanic_result['count'] >= $max_result['max_cars_per_day']) {
-                $errors[] = "Selected mechanic is fully booked for this date";
+                $errors[] = "Selected mechanic is fully booked for this date (Maximum 4 appointments per day)";
             } else {
-                // Start transaction
                 $conn->begin_transaction();
                 
                 try {
-                    // Insert client if not exists
+                    $client_check = $conn->prepare("SELECT id FROM clients WHERE phone = ?");
+                    $client_check->bind_param("s", $phone);
+                    $client_check->execute();
+                    $client_result = $client_check->get_result();
+                    
+                    // Insert client if not exists, otherwise use existing client
                     if ($client_result->num_rows == 0) {
                         $insert_client = $conn->prepare("INSERT INTO clients (name, address, phone, car_license, car_engine) VALUES (?, ?, ?, ?, ?)");
                         $insert_client->bind_param("sssss", $name, $address, $phone, $car_license, $car_engine);
                         $insert_client->execute();
                         $client_id = $conn->insert_id;
                     } else {
+                        $client = $client_result->fetch_assoc();
                         $client_id = $client['id'];
+                        
+                        //Add new client's info with new car information if different
+                        $insert_client = $conn->prepare("INSERT INTO clients (name, address, phone, car_license, car_engine) VALUES (?, ?, ?, ?, ?)");
+                        $insert_client->bind_param("sssss", $name, $address, $phone, $car_license, $car_engine);
+                        $insert_client->execute();
+                        $client_id = $conn->insert_id;
                     }
                     
-                    // Create appointment
                     $insert_appointment = $conn->prepare("INSERT INTO appointments (client_id, mechanic_id, appointment_date, status) VALUES (?, ?, ?, 'pending')");
                     $insert_appointment->bind_param("iis", $client_id, $mechanic_id, $appointment_date);
                     
@@ -270,7 +283,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             transition: var(--transition);
             text-transform: uppercase;
             letter-spacing: 1px;
-            width: 100%;
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
 
@@ -283,6 +295,15 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         .btn:active {
             transform: translateY(0);
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .btn-check {
+            background: #28a745;
+            margin-left: 10px;
+        }
+
+        .btn-check:hover {
+            background: #218838;
         }
 
         .alert {
@@ -305,6 +326,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             background-color: rgba(255, 51, 51, 0.2);
             color: var(--danger);
             border-left: 4px solid var(--danger);
+        }
+
+        .alert.info {
+            background-color: rgba(0, 123, 255, 0.2);
+            color: #007bff;
+            border-left: 4px solid #007bff;
         }
 
         .mechanic-availability {
@@ -425,35 +452,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 background-attachment: scroll;
             }
         }
-
-        /* Tooltip for form fields */
-        .form-tooltip {
-            position: relative;
-            display: inline-block;
-        }
-
-        .form-tooltip .tooltiptext {
-            visibility: hidden;
-            width: 200px;
-            background-color: #555;
-            color: #fff;
-            text-align: center;
-            border-radius: 6px;
-            padding: 5px;
-            position: absolute;
-            z-index: 1;
-            bottom: 125%;
-            left: 50%;
-            margin-left: -100px;
-            opacity: 0;
-            transition: opacity 0.3s;
-            font-size: 0.8rem;
-        }
-
-        .form-tooltip:hover .tooltiptext {
-            visibility: visible;
-            opacity: 1;
-        }
     </style>
 </head>
 <body>
@@ -487,17 +485,41 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             
             <h2 style="margin-bottom: 1.5rem; color: var(--primary);">Book Your Appointment</h2>
             
-            <!-- Mechanic availability badges -->
-            <div class="mechanic-availability">
-                <?php foreach ($mechanics as $mechanic): ?>
-                    <div class="mechanic-badge <?= $mechanic['available_slots'] > 0 ? 'available' : 'unavailable' ?>">
-                        <i class="fas fa-<?= $mechanic['available_slots'] > 0 ? 'check' : 'times' ?>"></i>
-                        <?= $mechanic['name'] ?> (<?= $mechanic['available_slots'] ?> slots)
-                    </div>
-                <?php endforeach; ?>
-            </div>
-            
             <form method="POST">
+            <div class="form-group">
+                    <label for="appointment_date"><i class="fas fa-calendar-alt"></i> Appointment Date:</label>
+                    <div style="display: flex; gap: 10px; align-items: center;">
+                        <input type="date" id="appointment_date" name="appointment_date" class="form-control" min="<?= date('Y-m-d') ?>" required 
+                               value="<?= htmlspecialchars($selected_date) ?>">
+                        <button type="button" id="check-availability" class="btn btn-check">
+                            <i class="fas fa-search"></i> Check Availability
+                        </button>
+                    </div>
+                </div>
+                
+                <?php if ($availability_checked): ?>
+                    <?php if (!empty($mechanics)): ?>
+                        <!-- Mechanic availability badges -->
+                        <div class="mechanic-availability">
+                            <?php foreach ($mechanics as $mechanic): ?>
+                                <div class="mechanic-badge <?= $mechanic['available_slots'] > 0 ? 'available' : 'unavailable' ?>">
+                                    <i class="fas fa-<?= $mechanic['available_slots'] > 0 ? 'check' : 'times' ?>"></i>
+                                    <?= $mechanic['name'] ?> (<?= $mechanic['available_slots'] ?> slots available)
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="mechanic_id"><i class="fas fa-user-cog"></i> Preferred Mechanic:</label>
+                            <select id="mechanic_id" name="mechanic_id" class="form-control" required>
+                                <option value="">Select a mechanic</option>
+                                <?php foreach ($mechanics as $mechanic): ?>
+                                    <option value="<?= $mechanic['id'] ?>">
+                                        <?= $mechanic['name'] ?> (<?= $mechanic['available_slots'] ?> slots available)
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
                 <div class="form-group">
                     <label for="name"><i class="fas fa-user"></i> Full Name:</label>
                     <input type="text" id="name" name="name" class="form-control" placeholder="John Doe" required>
@@ -523,26 +545,21 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     <input type="text" id="car_engine" name="car_engine" class="form-control" placeholder="Engine number" required>
                 </div>
                 
-                <div class="form-group">
-                    <label for="appointment_date"><i class="fas fa-calendar-alt"></i> Appointment Date:</label>
-                    <input type="date" id="appointment_date" name="appointment_date" class="form-control" min="<?= date('Y-m-d') ?>" required>
-                </div>
                 
-                <div class="form-group">
-                    <label for="mechanic_id"><i class="fas fa-user-cog"></i> Preferred Mechanic:</label>
-                    <select id="mechanic_id" name="mechanic_id" class="form-control" required>
-                        <option value="">Select a mechanic</option>
-                        <?php foreach ($mechanics as $mechanic): ?>
-                            <option value="<?= $mechanic['id'] ?>">
-                                <?= $mechanic['name'] ?> (<?= $mechanic['available_slots'] ?> slots available)
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
-                
-                <button type="submit" class="btn">
-                    <i class="fas fa-calendar-check"></i> Book Appointment
-                </button>
+                        
+                        <button type="submit" class="btn" style="width: 100%;">
+                            <i class="fas fa-calendar-check"></i> Book Appointment
+                        </button>
+                    <?php else: ?>
+                        <div class="alert info">
+                            <i class="fas fa-info-circle"></i> No mechanics available on <?= htmlspecialchars($selected_date) ?>. Please choose another date.
+                        </div>
+                    <?php endif; ?>
+                <?php else: ?>
+                    <div class="alert info">
+                        <i class="fas fa-info-circle"></i> Please select a date and click "Check Availability" to see available mechanics.
+                    </div>
+                <?php endif; ?>
             </form>
         </div>
     </div>
@@ -551,6 +568,19 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         // Enhanced client-side validation with better UX
         document.addEventListener('DOMContentLoaded', function() {
             const form = document.querySelector('form');
+            const checkAvailabilityBtn = document.getElementById('check-availability');
+            const dateInput = document.getElementById('appointment_date');
+            
+            // Check availability button click
+            checkAvailabilityBtn.addEventListener('click', function() {
+                if (dateInput.value) {
+                    const url = new URL(window.location.href);
+                    url.searchParams.set('appointment_date', dateInput.value);
+                    window.location.href = url.toString();
+                } else {
+                    alert('Please select a date first');
+                }
+            });
             
             // Add real-time validation
             const phoneInput = document.getElementById('phone');
@@ -602,7 +632,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             });
             
             // Date picker enhancement
-            const dateInput = document.getElementById('appointment_date');
             dateInput.addEventListener('focus', function() {
                 this.showPicker();
             });

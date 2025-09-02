@@ -17,7 +17,6 @@ if ($conn->connect_error) {
 // Set charset to utf8mb4 for full Unicode support
 $conn->set_charset("utf8mb4");
 
-
 if (!isset($_SESSION['admin_logged_in'])) {
     header("Location: admin_login.php");
     exit();
@@ -38,19 +37,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['update_appointment']))
         AND status = 'pending'
         AND id != ?
     ");
-    if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['delete_appointment'])) {
-    $appointment_id = $_POST['appointment_id'];
-    
-    $delete = $conn->prepare("DELETE FROM appointments WHERE id = ?");
-    $delete->bind_param("i", $appointment_id);
-    
-    if ($delete->execute()) {
-        $_SESSION['success'] = "Appointment deleted successfully!";
-    } else {
-        $_SESSION['error'] = "Failed to delete appointment.";
-    }
-    
-
     $mechanic_check->bind_param("isi", $new_mechanic_id, $new_date, $appointment_id);
     $mechanic_check->execute();
     $mechanic_result = $mechanic_check->get_result()->fetch_assoc();
@@ -72,7 +58,24 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['update_appointment']))
     } else {
         $_SESSION['error'] = "Selected mechanic is fully booked for this date";
     }
-    header("Location: admin_panel.php");
+    header("Location: admin_dashboard.php");
+    exit();
+}
+
+// Handle delete request
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['delete_appointment'])) {
+    $appointment_id = $_POST['appointment_id'];
+    
+    $delete = $conn->prepare("DELETE FROM appointments WHERE id = ?");
+    $delete->bind_param("i", $appointment_id);
+    
+    if ($delete->execute()) {
+        $_SESSION['success'] = "Appointment deleted successfully!";
+    } else {
+        $_SESSION['error'] = "Failed to delete appointment.";
+    }
+    
+    header("Location: admin_dashboard.php");
     exit();
 }
 
@@ -123,7 +126,7 @@ $mechanics = $conn->query("SELECT id, name FROM mechanics")->fetch_all(MYSQLI_AS
 </head>
 <body>
     <div class="container">
-        <h1>Admin Dashboard <a href="admin_login.php" class="logout"><i class="fas fa-sign-out-alt"></i> Logout</a></h1>
+        <h1>Admin Dashboard <a href="logout.php" class="logout"><i class="fas fa-sign-out-alt"></i> Logout</a></h1>
         
         <?php if (isset($_SESSION['success'])): ?>
             <div class="success"><?= $_SESSION['success'] ?></div>
